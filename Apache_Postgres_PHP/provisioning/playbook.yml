@@ -6,7 +6,9 @@
   vars:
     documentRoot: /var/www
     apacheConf: /etc/apache2
-    postgresConf: /etc/postgresql/12/main
+    phpVersion: 7.4
+    postgresVersion: 12
+    postgresConf: /etc/postgresql/{{ postgresVersion }}/main
     provisioning: /var/www/provisioning
     db_user: vagrant
     db_name: vagrant
@@ -22,15 +24,15 @@
     apt:
       name: 
         - apache2
-        - php7.4
-        - php7.4-xml
-        - php7.4-json
-        - php7.4-pgsql
-        - php7.4-mbstring
-        - libapache2-mod-php7.4
+        - php{{ phpVersion }}
+        - php{{ phpVersion }}-xml
+        - php{{ phpVersion }}-json
+        - php{{ phpVersion }}-pgsql
+        - php{{ phpVersion }}-mbstring
+        - libapache2-mod-php{{ phpVersion }}
         - phpunit
-        - postgresql
-        - postgresql-contrib
+        - postgresql-{{ postgresVersion }}
+        - postgresql-contrib-{{ postgresVersion }}
         - python3-psycopg2
         - acl
       state: latest
@@ -67,30 +69,51 @@
       objs: ALL_IN_SCHEMA
       privs: SELECT,INSERT,UPDATE,DELETE
 
-  - name: Execute sql file
-    become: true
+  - name: Adding access from inside the box
+    become: yes
     become_user: postgres
-    shell: psql {{ db_name }} < {{ provisioning }}/db.sql
-
-  - name: Stopping Postgresql
-    service:
-      name: postgresql
-      state: stopped
-
-  - name: Editing PG_HBA Config
-    template:
-      src: "{{ provisioning }}/templates/pg_hba.conf.j2"
+    postgresql_pg_hba:
       dest: "{{ postgresConf }}/pg_hba.conf"
+      contype: local
+      users: "{{ db_user }}"
+      databases: "{{ db_name }}"
+      method: md5
+      create: true
+      state: present
 
-  - name: Editing Postgres Config
-    template:
-      src: "{{ provisioning }}/templates/postgresql.conf.j2"
-      dest: "{{ postgresConf }}/postgresql.conf"
+  - name: Adding access from outside the box
+    become: yes
+    become_user: postgres
+    postgresql_pg_hba:
+      dest: "{{ postgresConf }}/pg_hba.conf"
+      contype: host
+      users: "{{ db_user }}"
+      databases: "{{ db_name }}"
+      source: 0.0.0.0/0
+      method: md5
+      create: true
+      state: present
+      
+  - name: Configure set listen_addresses.
+    become: yes
+    lineinfile: dest={{ postgresConf }}/postgresql.conf
+      regexp="listen_addresses =" line="listen_addresses = '*'" state=present
 
-  - name: Starting Postgresql
+  - name: Restarting PostgreSQL
     service:
       name: postgresql
       state: restarted
+
+  - name: Run queries from SQL script
+    become: yes
+    become_user: postgres
+    postgresql_query:
+      login_user: "{{ db_user }}"
+      login_password: "{{ db_password }}"
+      as_single_query: yes
+      db: "{{ db_name }}"
+      encoding: UTF-8
+      path_to_script: "{{ provisioning }}/db.sql"
 
   - name: Stopping Apache
     service:
