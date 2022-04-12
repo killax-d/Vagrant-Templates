@@ -1,0 +1,116 @@
+---
+- name: Installation
+  hosts: all
+  become: yes
+
+  vars:
+    documentRoot: /var/www
+    apacheConf: /etc/apache2
+    postgresConf: /etc/postgresql/12/main
+    provisioning: /var/www/provisioning
+    db_user: vagrant
+    db_name: vagrant
+    db_password: vagrant
+
+  tasks:
+  - name: Updating (Grab a coffee and wait)
+    apt:
+      update_cache: yes
+      upgrade: full
+
+  - name: Installation Apache/PHP/PostgreSQL
+    apt:
+      name: 
+        - apache2
+        - php7.4
+        - php7.4-xml
+        - php7.4-json
+        - php7.4-pgsql
+        - php7.4-mbstring
+        - libapache2-mod-php7.4
+        - phpunit
+        - postgresql
+        - postgresql-contrib
+        - python3-psycopg2
+        - acl
+      state: latest
+
+  - name: Create the database specified in vars
+    become: true
+    become_user: postgres
+    postgresql_db: name={{ db_name }}
+          template='template0'
+          state=present
+
+  - name: Ensure user has access to the new database
+    become: true
+    become_user: postgres
+    postgresql_user: db={{ db_name }}
+      name={{ db_user }}
+      password={{ db_password }}
+      priv=ALL
+      state=present
+
+  - name: Ensure user does not have unnecessary permissions
+    become: true
+    become_user: postgres
+    postgresql_user: name={{ db_user }}
+      role_attr_flags=NOSUPERUSER,NOCREATEDB
+      state=present
+
+  - name: Execute sql file
+    become: true
+    become_user: postgres
+    shell: psql {{ db_name }} < {{ provisioning }}/db.sql
+
+  - name: Stopping Postgresql
+    service:
+      name: postgresql
+      state: stopped
+
+  - name: Editing PG_HBA Config
+    template:
+      src: "{{ provisioning }}/templates/pg_hba.conf.j2"
+      dest: "{{ postgresConf }}/pg_hba.conf"
+
+  - name: Editing Postgres Config
+    template:
+      src: "{{ provisioning }}/templates/postgresql.conf.j2"
+      dest: "{{ postgresConf }}/postgresql.conf"
+
+  - name: Starting Postgresql
+    service:
+      name: postgresql
+      state: restarted
+
+  - name: Stopping Apache
+    service:
+      name: apache2
+      state: stopped
+
+  - name: Waiting Stopping Apache (wait 5 seconds)
+    pause:
+      seconds: 5
+
+  - name: Copy Apache config
+    template:
+      src: "{{ provisioning }}/templates/apache2.conf.j2"
+      dest: "{{ apacheConf }}/apache2.conf"
+
+  - name: Define default virtualhost
+    template:
+      src: "{{ provisioning }}/templates/000-default.conf.j2"
+      dest: "{{ apacheConf }}/sites-available/000-default.conf"
+
+  - name: Activate rewrite module
+    community.general.apache2_module:
+      state: present
+      name: rewrite
+
+  - name: Deleting "{{ documentRoot }}/html"
+    shell: rm -rf "{{ documentRoot }}/html"
+
+  - name: Starting Apache
+    service:
+      name: apache2
+      state: restarted
